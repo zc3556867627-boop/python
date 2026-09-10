@@ -1,71 +1,50 @@
-name: Automated Cloudflare SaaS Anycast Scanner
+name: Anycast Scanner (Direct Copy)
 
 on:
+  workflow_dispatch: # 在 GitHub 页面点击即可一键手动运行
   schedule:
-    - cron: '0 */6 * * *' # 每 6 小时自动运行一次
-  workflow_dispatch:        # 支持在 GitHub 页面手动一键触发
+    - cron: '0 */6 * * *'
 
+# 直接在配置中申请写入权限，无需去 Settings 页面手动勾选
 permissions:
   contents: write
 
 jobs:
-  scan-and-harvest:
+  scan:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
-      - name: 检出仓库代码
+      - name: 检出仓库
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: 设置 Go 运行环境
+      - name: 配置 Go 环境
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
           cache: true
 
-      - name: 执行 Anycast 矩阵并发扫描
-        env:
-          # 在 GitHub 仓库 Secrets 中设置 SAAS_HOST，或直接替换为你自己的主机名
-          SAAS_HOSTNAME: ${{ secrets.SAAS_HOST }}
+      - name: 执行高并发扫描
         run: |
-          # 若 Secrets 未设定，直接给出提示
-          if [ -z "$SAAS_HOSTNAME" ]; then
-            echo "[-] 警告: 未检测到 SAAS_HOST 密钥，请在 Settings -> Secrets 中设置，或在此处硬编码。"
-            # 填入你在 Cloudflare for SaaS 绑定的自定义域名
-            SAAS_HOSTNAME="fast.12341234.lol"
-          fi
+          # 此处直接写死你的 SaaS 域名，无需配置任何 GitHub Secrets
+          TARGET_DOMAIN="fast.12341234.lol"
           
-          echo "[*] 开始扫描目标: $SAAS_HOSTNAME"
-          go run main.go -host "$SAAS_HOSTNAME" -c 350 -t 1000 -top 32
+          echo "[*] 开始扫描，目标域名: $TARGET_DOMAIN"
+          go run main.go -host "$TARGET_DOMAIN" -c 350 -t 1000 -top 32
 
-      - name: 校验生成文件
+      - name: 渲染至 GitHub 网页摘要 (方便一键复制)
         run: |
-          if [ ! -s clean_ips.txt ]; then
-            echo "[-] 错误: 扫描未发现有效 Anycast IP，中断提交！"
-            exit 1
-          fi
-          echo "[+] 成功生成的优质 IP 数量: $(wc -l < clean_ips.txt)"
+          echo "### 🚀 最新 Anycast SaaS 优选 IP 列表" >> $GITHUB_STEP_SUMMARY
+          echo "可以直接在下方代码框右上角点击一键复制：" >> $GITHUB_STEP_SUMMARY
+          echo '```text' >> $GITHUB_STEP_SUMMARY
+          cat clean_ips.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
-      - name: 自动提交更新至仓库
+      - name: 保存至仓库文件目录 (clean_ips.txt)
+        continue-on-error: true # 即使仓库全局禁止了推送，也不会导致任务报错
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add clean_ips.txt scan_results.csv
-          
-          # 判断是否有实质性变动
-          if git diff --staged --quiet; then
-            echo "[*] 节点数据无变动，跳过提交。"
-          else
-            git commit -m "Auto-Update: $(date '+%Y-%m-%d %H:%M:%S') 捕获最新 Anycast SaaS 优选 IP"
-            git push origin HEAD:${{ github.ref }}
-          fi
-
-      - name: 上传扫描明细产物 (Artifacts)
-        uses: actions/upload-artifact@v4
-        with:
-          name: anycast-scan-logs
-          path: |
-            clean_ips.txt
-            scan_results.csv
+          git commit -m "update: 优选 Anycast 节点更新" || exit 0
+          git push origin HEAD:${{ github.ref }}
