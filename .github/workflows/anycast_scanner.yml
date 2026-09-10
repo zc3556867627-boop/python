@@ -1,0 +1,71 @@
+name: Automated Cloudflare SaaS Anycast Scanner
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # 每 6 小时自动运行一次
+  workflow_dispatch:        # 支持在 GitHub 页面手动一键触发
+
+permissions:
+  contents: write
+
+jobs:
+  scan-and-harvest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: 设置 Go 运行环境
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: 执行 Anycast 矩阵并发扫描
+        env:
+          # 在 GitHub 仓库 Secrets 中设置 SAAS_HOST，或直接替换为你自己的主机名
+          SAAS_HOSTNAME: ${{ secrets.SAAS_HOST }}
+        run: |
+          # 若 Secrets 未设定，直接给出提示
+          if [ -z "$SAAS_HOSTNAME" ]; then
+            echo "[-] 警告: 未检测到 SAAS_HOST 密钥，请在 Settings -> Secrets 中设置，或在此处硬编码。"
+            # 填入你在 Cloudflare for SaaS 绑定的自定义域名
+            SAAS_HOSTNAME="fast.12341234.lol"
+          fi
+          
+          echo "[*] 开始扫描目标: $SAAS_HOSTNAME"
+          go run main.go -host "$SAAS_HOSTNAME" -c 350 -t 1000 -top 32
+
+      - name: 校验生成文件
+        run: |
+          if [ ! -s clean_ips.txt ]; then
+            echo "[-] 错误: 扫描未发现有效 Anycast IP，中断提交！"
+            exit 1
+          fi
+          echo "[+] 成功生成的优质 IP 数量: $(wc -l < clean_ips.txt)"
+
+      - name: 自动提交更新至仓库
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add clean_ips.txt scan_results.csv
+          
+          # 判断是否有实质性变动
+          if git diff --staged --quiet; then
+            echo "[*] 节点数据无变动，跳过提交。"
+          else
+            git commit -m "Auto-Update: $(date '+%Y-%m-%d %H:%M:%S') 捕获最新 Anycast SaaS 优选 IP"
+            git push origin HEAD:${{ github.ref }}
+          fi
+
+      - name: 上传扫描明细产物 (Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: anycast-scan-logs
+          path: |
+            clean_ips.txt
+            scan_results.csv
